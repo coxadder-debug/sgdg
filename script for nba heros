@@ -1,0 +1,1256 @@
+-- lang: Lua, file: nbaheroeshub.lua
+-- target: Roblox client | Synapse X / KRNL / Fluxus / Delta
+-- game: NBA Heroes by ghostmountain62 (126424052816775)
+-- style: Linoria-compact | black / red
+-- RightShift = toggle | G = Auto Green
+
+-------------------------------------------------
+-- SERVICES
+-------------------------------------------------
+local Players  = game:GetService("Players")
+local RunSvc   = game:GetService("RunService")
+local UIS      = game:GetService("UserInputService")
+local VU       = game:GetService("VirtualUser")
+local VIM      = game:GetService("VirtualInputManager")
+local SGui     = game:GetService("StarterGui")
+local WS       = game:GetService("Workspace")
+local RS       = game:GetService("ReplicatedStorage")
+local TS       = game:GetService("TweenService")
+
+local LP = Players.LocalPlayer
+repeat task.wait() until LP.Character
+local Char = LP.Character
+local Root = Char:WaitForChild("HumanoidRootPart")
+local Hum  = Char:WaitForChild("Humanoid")
+
+-------------------------------------------------
+-- COLORS  (black / red Linoria palette)
+-------------------------------------------------
+local C = {
+    bg      = Color3.fromRGB(13,  1,  2),
+    surf    = Color3.fromRGB(18,  2,  3),
+    card    = Color3.fromRGB(22,  2,  4),
+    border  = Color3.fromRGB(52,  5,  9),
+    acc     = Color3.fromRGB(90,  0, 13),
+    hot     = Color3.fromRGB(170, 0, 21),
+    bright  = Color3.fromRGB(255, 22, 36),
+    glow    = Color3.fromRGB(255, 80, 80),
+    text    = Color3.fromRGB(255,205,210),
+    dim     = Color3.fromRGB(105, 38, 50),
+    on      = Color3.fromRGB(155, 0, 19),
+    off     = Color3.fromRGB(22,  2,  4),
+    sec     = Color3.fromRGB(185, 0, 23),
+    slid    = Color3.fromRGB(130, 0, 17),
+    black   = Color3.fromRGB(0,   0,  0),
+    title   = Color3.fromRGB(8,   0,  1),
+    tabact  = Color3.fromRGB(20,  2,  4),
+    tabi    = Color3.fromRGB(10,  1,  2),
+}
+
+-------------------------------------------------
+-- CONFIG
+-------------------------------------------------
+local Cfg = {
+    AutoGreen={on=false}, PerfectRelease={on=false},
+    ShotMeterSpoof={on=false}, ShotTimingAssist={on=false},
+    NoFailShot={on=false}, RangeIndicator={on=false},
+    ReleasePredictor={on=false}, GreenTime={val=480},
+    StealAssist={on=false}, BlockAssist={on=false},
+    DefensiveAura={on=false}, PlayerESP={on=false},
+    BallESP={on=false}, InterceptionPred={on=false},
+    AutoContest={on=false}, AntiAnkle={on=false},
+    SpeedBoost={on=false,val=80}, SprintAssist={on=false},
+    QuickStop={on=false}, AirControl={on=false},
+    InfStamina={on=false}, InfJump={on=false}, Noclip={on=false},
+    AutoAbility={on=false}, AbilityCooldown={on=false},
+    AutoAwakening={on=false}, AwakeningIndicator={on=false},
+    AbilityRange={on=false}, UltimateAlert={on=false},
+    AutoRebound={on=false}, AutoPass={on=false},
+    PassPrediction={on=false}, BallMagnet={on=false},
+    AutoPosition={on=false}, TeammateHighlight={on=false},
+    AutoQueue={on=false}, AntiAFK={on=true}, GoalFX={on=true},
+    DistanceESP={on=false}, HealthBars={on=false},
+    TeamColors={on=false}, SkeletonESP={on=false},
+    TracerLines={on=false}, FOVCircle={on=false},
+    ShowFPS={on=true}, ShowPing={on=true},
+}
+
+-------------------------------------------------
+-- STATS
+-------------------------------------------------
+local Stats = {
+    StartTime=tick(), Shots=0, Greens=0,
+    Steals=0, Blocks=0, Goals=0,
+    AnklesSaved=0, CoinsEarned=0, PacksOpened=0,
+}
+
+-------------------------------------------------
+-- REMOTE CACHE
+-------------------------------------------------
+local _coinRemote=nil; local _coinArgs={}
+local _packRemote=nil; local _packArgs={}
+
+-------------------------------------------------
+-- VISUAL STATE
+-------------------------------------------------
+local _bv=nil; local _defAura=nil; local _awakeGui=nil
+local _passGui=nil; local _rangePart=nil; local _fovGui=nil
+local _fovFrame=nil; local _tracerGui=nil; local _espBillboards={}
+local _shotTimingGui=nil; local _needlePos=0; local _needleDir=1
+local _flashFrame=nil; local _greenLatch=false
+local _ankleCD=false; local _blockCD=false
+local _fps=0; local _fpsFrames=0; local _fpsLast=tick()
+local HubKeybind=Enum.KeyCode.RightShift
+local _rebindMode=false; local _rebindBtnRef=nil
+local _winOpen=true
+local _fpslbl=nil; local _pinglbl=nil
+
+-------------------------------------------------
+-- UTIL
+-------------------------------------------------
+local function Notify(msg)
+    pcall(function() SGui:SetCore("SendNotification",{Title="NBA Hub",Text=msg,Duration=3}) end)
+end
+local function SimKey(kc,down)
+    pcall(function() VIM:SendKeyEvent(down,kc,false,nil) end)
+end
+local function FindBall()
+    for _,v in ipairs(WS:GetDescendants()) do
+        if v:IsA("BasePart") then
+            local n=v.Name:lower()
+            if n=="ball" or n=="basketball" or n:find("ball") then return v end
+        end
+    end
+    return nil
+end
+local function FmtTime(s)
+    return string.format("%02d:%02d",math.floor(s/60),math.floor(s%60))
+end
+local function GetPing() return math.floor(LP:GetNetworkPing()*1000) end
+local function IsTeammate(plr)
+    if LP.Team and plr.Team then return LP.Team==plr.Team end; return false
+end
+local function TW(obj,t,props)
+    return TS:Create(obj,TweenInfo.new(t,Enum.EasingStyle.Quad,Enum.EasingDirection.Out),props)
+end
+
+-------------------------------------------------
+-- SPEED (BodyVelocity — WalkSpeed stays 16)
+-------------------------------------------------
+local function CleanBV()
+    if _bv then pcall(function() _bv:Destroy() end); _bv=nil end
+end
+local function GetBV()
+    if _bv and _bv.Parent then return _bv end; CleanBV()
+    if not LP.Character then return nil end
+    local root=LP.Character:FindFirstChild("HumanoidRootPart"); if not root then return nil end
+    local bv=Instance.new("BodyVelocity")
+    bv.MaxForce=Vector3.new(1e5,0,1e5); bv.P=1e5; bv.Velocity=Vector3.zero; bv.Parent=root; _bv=bv; return bv
+end
+
+-------------------------------------------------
+-- GOAL FX
+-------------------------------------------------
+local function EnsureFlash()
+    if _flashFrame and _flashFrame.Parent then return end
+    local g=Instance.new("ScreenGui"); g.Name="_NBAFlash"; g.ResetOnSpawn=false
+    g.ZIndexBehavior=Enum.ZIndexBehavior.Sibling; g.Parent=LP.PlayerGui
+    local f=Instance.new("Frame",g); f.Size=UDim2.new(1,0,1,0)
+    f.BackgroundColor3=Color3.fromRGB(255,0,20); f.BackgroundTransparency=1; f.BorderSizePixel=0; f.ZIndex=100
+    _flashFrame=f
+end
+local function TriggerGoalFX()
+    if not Cfg.GoalFX.on then return end; Stats.Goals=Stats.Goals+1
+    EnsureFlash(); _flashFrame.BackgroundTransparency=0.3
+    TW(_flashFrame,0.8,{BackgroundTransparency=1}):Play()
+    local pg=Instance.new("ScreenGui"); pg.Name="_GoalPop"; pg.ResetOnSpawn=false
+    pg.ZIndexBehavior=Enum.ZIndexBehavior.Sibling; pg.Parent=LP.PlayerGui
+    local lbl=Instance.new("TextLabel",pg)
+    lbl.Size=UDim2.new(0,340,0,65); lbl.AnchorPoint=Vector2.new(0.5,0)
+    lbl.Position=UDim2.new(0.5,0,0.4,0); lbl.BackgroundTransparency=1
+    lbl.Text="SCORED!"; lbl.TextColor3=C.bright; lbl.Font=Enum.Font.GothamBlack; lbl.TextSize=48
+    lbl.TextStrokeTransparency=0; lbl.TextStrokeColor3=C.black; lbl.ZIndex=200; lbl.TextTransparency=1
+    TW(lbl,0.15,{Position=UDim2.new(0.5,0,0.33,0),TextTransparency=0}):Play()
+    task.delay(0.9,function()
+        TW(lbl,0.28,{Position=UDim2.new(0.5,0,0.23,0),TextTransparency=1}):Play()
+        task.delay(0.32,function() pcall(function() pg:Destroy() end) end)
+    end)
+    pcall(function()
+        if LP.Character then
+            local hl=Instance.new("Highlight",LP.Character); hl.FillColor=C.bright; hl.OutlineColor=C.glow
+            hl.FillTransparency=0.1; hl.OutlineTransparency=0; hl.DepthMode=Enum.HighlightDepthMode.AlwaysOnTop
+            task.delay(0.9,function() pcall(function() hl:Destroy() end) end)
+        end
+    end)
+end
+local function WatchScore()
+    local ls=LP:FindFirstChild("leaderstats"); if not ls then return end
+    for _,v in ipairs(ls:GetChildren()) do
+        local n=v.Name:lower()
+        if n:find("score") or n:find("point") or n:find("goal") or n:find("basket") then
+            v.Changed:Connect(function() TriggerGoalFX() end)
+        end
+    end
+end
+task.delay(2,WatchScore)
+
+-------------------------------------------------
+-- GREEN MACRO
+-------------------------------------------------
+local function GreenMacro()
+    if _greenLatch then return end; _greenLatch=true
+    local hold=Cfg.GreenTime.val/1000
+    pcall(function()
+        if mouse1press then mouse1press(); task.wait(hold); mouse1release()
+        else
+            local vp=WS.CurrentCamera.ViewportSize
+            VIM:SendMouseButtonEvent(vp.X/2,vp.Y/2,0,true,game,0)
+            task.wait(hold)
+            VIM:SendMouseButtonEvent(vp.X/2,vp.Y/2,0,false,game,0)
+        end
+    end)
+    Stats.Shots=Stats.Shots+1; Stats.Greens=Stats.Greens+1; task.wait(1.4); _greenLatch=false
+end
+
+-------------------------------------------------
+-- POSSESSION
+-------------------------------------------------
+local function HasBall()
+    local ball=FindBall(); if not ball then return false end
+    if not LP.Character then return false end
+    for _,v in ipairs(ball:GetChildren()) do
+        if v:IsA("Weld") or v:IsA("WeldConstraint") or v:IsA("Motor6D") then
+            local p1=v.Part1
+            if p1 and Players:GetPlayerFromCharacter(p1.Parent)==LP then return true end
+        end
+    end
+    local root=LP.Character:FindFirstChild("HumanoidRootPart"); if not root then return false end
+    return (root.Position-ball.Position).Magnitude<6 and ball.AssemblyLinearVelocity.Magnitude<8
+end
+local function PredictBallPos(ball,t)
+    return ball.Position+ball.AssemblyLinearVelocity*t+Vector3.new(0,-196.2,0)*0.5*t*t
+end
+
+-------------------------------------------------
+-- ANTI ANKLE
+-------------------------------------------------
+local function AntiAnkleStep()
+    if _ankleCD then return end
+    if not LP.Character then return end
+    local root=LP.Character:FindFirstChild("HumanoidRootPart"); if not root then return end
+    local ball=FindBall(); if not ball then return end
+    if (root.Position-ball.Position).Magnitude>9 then return end
+    local spd=Vector3.new(ball.AssemblyLinearVelocity.X,0,ball.AssemblyLinearVelocity.Z).Magnitude
+    if spd<18 then return end
+    local away=(root.Position-ball.Position); away=Vector3.new(away.X,0,away.Z).Unit
+    root.CFrame=CFrame.new(root.Position+away*6,root.Position+away*6+root.CFrame.LookVector)
+    local hum=LP.Character:FindFirstChild("Humanoid")
+    if hum then hum:ChangeState(Enum.HumanoidStateType.Jumping) end
+    Stats.AnklesSaved=Stats.AnklesSaved+1; _ankleCD=true; task.delay(0.6,function() _ankleCD=false end)
+end
+
+-------------------------------------------------
+-- AUTO BLOCK
+-------------------------------------------------
+local function AutoBlockTick()
+    if _blockCD then return end
+    if not LP.Character then return end
+    local ball=FindBall(); if not ball then return end
+    local vel=ball.AssemblyLinearVelocity
+    if vel.Y<12 or Vector3.new(vel.X,0,vel.Z).Magnitude<4 then return end
+    if HasBall() then return end
+    local predicted=PredictBallPos(ball,0.35)
+    local root=LP.Character:FindFirstChild("HumanoidRootPart"); if not root then return end
+    if (root.Position-predicted).Magnitude>20 then return end
+    root.CFrame=CFrame.new(Vector3.new(predicted.X,root.Position.Y,predicted.Z),
+        Vector3.new(predicted.X,root.Position.Y,predicted.Z)+root.CFrame.LookVector)
+    local hum=LP.Character:FindFirstChild("Humanoid")
+    if hum then hum:ChangeState(Enum.HumanoidStateType.Jumping) end
+    Stats.Blocks=Stats.Blocks+1; _blockCD=true; task.delay(0.9,function() _blockCD=false end)
+end
+
+-------------------------------------------------
+-- VISUAL HELPERS
+-------------------------------------------------
+local function UpdateRangeIndicator()
+    if not Cfg.RangeIndicator.on then
+        if _rangePart then pcall(function() _rangePart:Destroy() end); _rangePart=nil end; return
+    end
+    if not LP.Character then return end
+    local root=LP.Character:FindFirstChild("HumanoidRootPart"); if not root then return end
+    if not _rangePart or not _rangePart.Parent then
+        _rangePart=Instance.new("Part"); _rangePart.Name="_NBARange"
+        _rangePart.Shape=Enum.PartType.Cylinder; _rangePart.Size=Vector3.new(0.1,36,36)
+        _rangePart.Anchored=true; _rangePart.CanCollide=false; _rangePart.Material=Enum.Material.Neon
+        _rangePart.Color=C.bright; _rangePart.Transparency=0.82; _rangePart.CastShadow=false; _rangePart.Parent=WS
+    end
+    _rangePart.CFrame=CFrame.new(root.Position.X,root.Position.Y-2.9,root.Position.Z)*CFrame.Angles(0,0,math.pi/2)
+end
+local function UpdateFOVCircle()
+    if not Cfg.FOVCircle.on then
+        if _fovGui then pcall(function() _fovGui:Destroy() end); _fovGui=nil; _fovFrame=nil end; return
+    end
+    if _fovGui and _fovGui.Parent then return end
+    _fovGui=Instance.new("ScreenGui"); _fovGui.Name="_NBAFOV"; _fovGui.ResetOnSpawn=false
+    _fovGui.ZIndexBehavior=Enum.ZIndexBehavior.Sibling; _fovGui.Parent=LP.PlayerGui
+    _fovFrame=Instance.new("Frame",_fovGui)
+    _fovFrame.Size=UDim2.new(0,160,0,160); _fovFrame.AnchorPoint=Vector2.new(0.5,0.5)
+    _fovFrame.Position=UDim2.new(0.5,0,0.5,0); _fovFrame.BackgroundTransparency=1; _fovFrame.BorderSizePixel=0
+    Instance.new("UICorner",_fovFrame).CornerRadius=UDim.new(1,0)
+    local s=Instance.new("UIStroke",_fovFrame); s.Color=C.bright; s.Thickness=1.5; s.Transparency=0.35
+end
+local function UpdateShotTimingNeedle(dt)
+    if not Cfg.ShotTimingAssist.on then
+        if _shotTimingGui then pcall(function() _shotTimingGui:Destroy() end); _shotTimingGui=nil end; return
+    end
+    if not _shotTimingGui or not _shotTimingGui.Parent then
+        _shotTimingGui=Instance.new("ScreenGui"); _shotTimingGui.Name="_NBAShotTime"
+        _shotTimingGui.ResetOnSpawn=false; _shotTimingGui.ZIndexBehavior=Enum.ZIndexBehavior.Sibling; _shotTimingGui.Parent=LP.PlayerGui
+        local bg=Instance.new("Frame",_shotTimingGui); bg.Name="Bg"
+        bg.Size=UDim2.new(0,200,0,14); bg.AnchorPoint=Vector2.new(0.5,0)
+        bg.Position=UDim2.new(0.5,0,0.77,0); bg.BackgroundColor3=C.card; bg.BorderSizePixel=0
+        Instance.new("UICorner",bg).CornerRadius=UDim.new(0,2)
+        local s=Instance.new("UIStroke",bg); s.Color=C.border; s.Thickness=1
+        local green=Instance.new("Frame",bg); green.Name="Green"; green.Size=UDim2.new(0.24,0,1,0)
+        green.Position=UDim2.new(0.38,0,0,0); green.BackgroundColor3=Color3.fromRGB(0,200,60); green.BorderSizePixel=0
+        Instance.new("UICorner",green).CornerRadius=UDim.new(0,2)
+        local needle=Instance.new("Frame",bg); needle.Name="Needle"
+        needle.Size=UDim2.new(0,2,1,0); needle.BackgroundColor3=Color3.fromRGB(255,255,255); needle.BorderSizePixel=0
+        local lbl=Instance.new("TextLabel",_shotTimingGui); lbl.Size=UDim2.new(0,200,0,12)
+        lbl.AnchorPoint=Vector2.new(0.5,0); lbl.Position=UDim2.new(0.5,0,0.77,16)
+        lbl.BackgroundTransparency=1; lbl.Text="SHOT TIMING"; lbl.TextColor3=C.dim
+        lbl.Font=Enum.Font.GothamBold; lbl.TextSize=9
+    end
+    local bg=_shotTimingGui:FindFirstChild("Bg"); if not bg then return end
+    local needle=bg:FindFirstChild("Needle"); if not needle then return end
+    _needlePos=_needlePos+_needleDir*dt*0.85
+    if _needlePos>=1 then _needlePos=1; _needleDir=-1 end
+    if _needlePos<=0 then _needlePos=0; _needleDir=1 end
+    needle.Position=UDim2.new(_needlePos,-1,0,0)
+    local inG=_needlePos>=0.38 and _needlePos<=0.62
+    needle.BackgroundColor3=inG and Color3.fromRGB(0,255,60) or Color3.fromRGB(255,255,255)
+end
+local function UpdatePlayerOverlays()
+    for _,plr in ipairs(Players:GetPlayers()) do
+        if plr==LP then continue end
+        local char=plr.Character; if not char then continue end
+        local hrp=char:FindFirstChild("HumanoidRootPart"); if not hrp then continue end
+        local hum=char:FindFirstChild("Humanoid")
+        if Cfg.PlayerESP.on then
+            if not char:FindFirstChild("_PlayerHL") then
+                local hl=Instance.new("Highlight",char); hl.Name="_PlayerHL"
+                hl.FillColor=IsTeammate(plr) and Color3.fromRGB(0,80,255) or C.hot
+                hl.OutlineColor=IsTeammate(plr) and Color3.fromRGB(80,160,255) or C.bright
+                hl.FillTransparency=0.45; hl.OutlineTransparency=0; hl.DepthMode=Enum.HighlightDepthMode.AlwaysOnTop
+            end
+        else local hl=char:FindFirstChild("_PlayerHL"); if hl then hl:Destroy() end end
+        if Cfg.TeammateHighlight.on and IsTeammate(plr) then
+            if not char:FindFirstChild("_TeamHL") then
+                local hl=Instance.new("Highlight",char); hl.Name="_TeamHL"
+                hl.FillColor=Color3.fromRGB(0,80,255); hl.OutlineColor=Color3.fromRGB(80,160,255)
+                hl.FillTransparency=0.5; hl.OutlineTransparency=0; hl.DepthMode=Enum.HighlightDepthMode.AlwaysOnTop
+            end
+        else local hl=char:FindFirstChild("_TeamHL"); if hl then hl:Destroy() end end
+        local bbKey=tostring(plr.UserId)
+        if Cfg.HealthBars.on or Cfg.DistanceESP.on then
+            local bb=_espBillboards[bbKey]
+            if not bb or not bb.Parent then
+                bb=Instance.new("BillboardGui"); bb.Size=UDim2.new(0,80,0,22)
+                bb.StudsOffset=Vector3.new(0,3.5,0); bb.AlwaysOnTop=true; bb.Adornee=hrp; bb.Parent=hrp
+                if Cfg.DistanceESP.on then
+                    local dl=Instance.new("TextLabel",bb); dl.Name="_DistLbl"
+                    dl.Size=UDim2.new(1,0,0.5,0); dl.BackgroundTransparency=1
+                    dl.TextColor3=C.text; dl.Font=Enum.Font.GothamBold; dl.TextSize=9; dl.Text="0m"
+                end
+                if Cfg.HealthBars.on then
+                    local bg2=Instance.new("Frame",bb); bg2.Name="_HealthBg"
+                    bg2.Size=UDim2.new(1,0,Cfg.DistanceESP.on and 0.5 or 1,-2)
+                    bg2.Position=Cfg.DistanceESP.on and UDim2.new(0,0,0.5,0) or UDim2.new(0,0,0,0)
+                    bg2.BackgroundColor3=Color3.fromRGB(40,0,0); bg2.BorderSizePixel=0
+                    local fill=Instance.new("Frame",bg2); fill.Name="_HealthFill"
+                    fill.BackgroundColor3=Color3.fromRGB(0,180,50); fill.BorderSizePixel=0; fill.Size=UDim2.new(1,0,1,0)
+                end
+                _espBillboards[bbKey]=bb
+            end
+            local myRoot=LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
+            if myRoot then
+                local dist=math.floor((myRoot.Position-hrp.Position).Magnitude)
+                local dl=bb:FindFirstChild("_DistLbl"); if dl then dl.Text=dist.."m" end
+            end
+            if hum then
+                local bg2=bb:FindFirstChild("_HealthBg"); local fill=bg2 and bg2:FindFirstChild("_HealthFill")
+                if fill then
+                    local r=math.clamp(hum.Health/math.max(hum.MaxHealth,1),0,1)
+                    fill.Size=UDim2.new(r,0,1,0)
+                    fill.BackgroundColor3=r>0.5 and Color3.fromRGB(0,190,50) or (r>0.25 and Color3.fromRGB(255,160,0) or Color3.fromRGB(220,20,20))
+                end
+            end
+        else local bb=_espBillboards[bbKey]; if bb then pcall(function() bb:Destroy() end); _espBillboards[bbKey]=nil end end
+    end
+end
+local function CleanTracers()
+    if _tracerGui then pcall(function() _tracerGui:Destroy() end); _tracerGui=nil end
+end
+local function UpdateTracers()
+    if not Cfg.TracerLines.on then CleanTracers(); return end
+    if not _tracerGui or not _tracerGui.Parent then
+        _tracerGui=Instance.new("ScreenGui"); _tracerGui.Name="_NBATracer"; _tracerGui.ResetOnSpawn=false
+        _tracerGui.ZIndexBehavior=Enum.ZIndexBehavior.Sibling; _tracerGui.Parent=LP.PlayerGui
+    end
+    for _,ln in ipairs(_tracerGui:GetChildren()) do ln:Destroy() end
+    local cam=WS.CurrentCamera; local vp=cam.ViewportSize; local cx,cy=vp.X/2,vp.Y
+    for _,plr in ipairs(Players:GetPlayers()) do
+        if plr==LP then continue end
+        local char=plr.Character; if not char then continue end
+        local hrp=char:FindFirstChild("HumanoidRootPart"); if not hrp then continue end
+        local sp,onScreen=cam:WorldToScreenPoint(hrp.Position); if not onScreen then continue end
+        local dx,dy=sp.X-cx,sp.Y-cy; local len=math.sqrt(dx*dx+dy*dy); if len<1 then continue end
+        local line=Instance.new("Frame",_tracerGui); line.AnchorPoint=Vector2.new(0,0.5)
+        line.Position=UDim2.new(0,cx,0,cy); line.Size=UDim2.new(0,len,0,1)
+        line.Rotation=math.deg(math.atan2(dy,dx)); line.BorderSizePixel=0
+        line.BackgroundColor3=IsTeammate(plr) and Color3.fromRGB(0,100,255) or C.hot
+        line.BackgroundTransparency=0.3
+    end
+end
+local function UpdateDefensiveAura()
+    if not Cfg.DefensiveAura.on then
+        if _defAura then pcall(function() _defAura:Destroy() end); _defAura=nil end; return
+    end
+    if not LP.Character then return end
+    if _defAura and _defAura.Parent then return end
+    local hl=Instance.new("Highlight"); hl.Name="_DefAura"; hl.FillColor=C.hot; hl.OutlineColor=C.bright
+    hl.FillTransparency=0.7; hl.OutlineTransparency=0.2; hl.DepthMode=Enum.HighlightDepthMode.AlwaysOnTop
+    hl.Adornee=LP.Character; hl.Parent=LP.Character; _defAura=hl
+end
+local function UpdateAwakeningIndicator()
+    if not Cfg.AwakeningIndicator.on then
+        if _awakeGui then pcall(function() _awakeGui:Destroy() end); _awakeGui=nil end; return
+    end
+    if _awakeGui and _awakeGui.Parent then return end
+    _awakeGui=Instance.new("ScreenGui"); _awakeGui.Name="_NBAAwaken"; _awakeGui.ResetOnSpawn=false
+    _awakeGui.ZIndexBehavior=Enum.ZIndexBehavior.Sibling; _awakeGui.Parent=LP.PlayerGui
+    local lbl=Instance.new("TextLabel",_awakeGui)
+    lbl.Size=UDim2.new(0,230,0,28); lbl.AnchorPoint=Vector2.new(0.5,0); lbl.Position=UDim2.new(0.5,0,0.08,0)
+    lbl.BackgroundColor3=C.hot; lbl.BackgroundTransparency=0.1; lbl.BorderSizePixel=0
+    lbl.Text="⚡  AWAKENING READY  ⚡"; lbl.TextColor3=Color3.fromRGB(255,255,255)
+    lbl.Font=Enum.Font.GothamBold; lbl.TextSize=13; lbl.ZIndex=99
+    Instance.new("UICorner",lbl).CornerRadius=UDim.new(0,4)
+    TS:Create(lbl,TweenInfo.new(0.7,Enum.EasingStyle.Sine,Enum.EasingDirection.InOut,-1,true),{TextTransparency=0.35}):Play()
+end
+
+-------------------------------------------------
+-- GUI  (Linoria-compact layout)
+-------------------------------------------------
+local WIN_W    = 600
+local TITLE_H  = 22
+local TAB_H    = 24
+local STATUS_H = 18
+local CONTENT_H= 388
+local WIN_H    = TITLE_H + TAB_H + CONTENT_H + STATUS_H   -- 452
+local COL_W    = math.floor(WIN_W / 2)                    -- 300
+
+local OPEN_Y   = 50
+local CLOSE_Y  = -(WIN_H + 20)
+
+local Gui = Instance.new("ScreenGui")
+Gui.Name="NBAHeroesHub"; Gui.ResetOnSpawn=false
+Gui.ZIndexBehavior=Enum.ZIndexBehavior.Sibling; Gui.Parent=LP.PlayerGui
+
+local Win = Instance.new("Frame", Gui)
+Win.Size=UDim2.new(0,WIN_W,0,WIN_H); Win.Position=UDim2.new(0,50,0,OPEN_Y)
+Win.BackgroundColor3=C.bg; Win.BorderSizePixel=0; Win.ClipsDescendants=true; Win.ZIndex=10
+local WinStroke=Instance.new("UIStroke",Win)
+WinStroke.Color=C.border; WinStroke.Thickness=1; WinStroke.ApplyStrokeMode=Enum.ApplyStrokeMode.Border
+
+-- open / close (forward declare, bound below)
+local OpenWin, CloseWin
+
+-------------------------------------------------
+-- TITLE BAR
+-------------------------------------------------
+local TitleBar=Instance.new("Frame",Win)
+TitleBar.Size=UDim2.new(1,0,0,TITLE_H); TitleBar.BackgroundColor3=C.title; TitleBar.BorderSizePixel=0; TitleBar.ZIndex=12
+local TitleBotLine=Instance.new("Frame",TitleBar)
+TitleBotLine.Size=UDim2.new(1,0,0,1); TitleBotLine.Position=UDim2.new(0,0,1,-1)
+TitleBotLine.BackgroundColor3=C.border; TitleBotLine.BorderSizePixel=0; TitleBotLine.ZIndex=13
+-- pulse border line
+TS:Create(TitleBotLine,TweenInfo.new(2.5,Enum.EasingStyle.Sine,Enum.EasingDirection.InOut,-1,true),{BackgroundColor3=C.hot}):Play()
+
+local TitleLbl=Instance.new("TextLabel",TitleBar)
+TitleLbl.Size=UDim2.new(1,-120,1,0); TitleLbl.Position=UDim2.new(0,8,0,0)
+TitleLbl.BackgroundTransparency=1; TitleLbl.Text="made by ghostmountainfan62"
+TitleLbl.TextColor3=C.dim; TitleLbl.Font=Enum.Font.Code; TitleLbl.TextSize=11
+TitleLbl.TextXAlignment=Enum.TextXAlignment.Left; TitleLbl.ZIndex=13
+
+_fpslbl=Instance.new("TextLabel",TitleBar)
+_fpslbl.Size=UDim2.new(0,100,1,0); _fpslbl.Position=UDim2.new(1,-128,0,0)
+_fpslbl.BackgroundTransparency=1; _fpslbl.Text="FPS: --  PING: --"
+_fpslbl.TextColor3=C.dim; _fpslbl.Font=Enum.Font.Code; _fpslbl.TextSize=10
+_fpslbl.TextXAlignment=Enum.TextXAlignment.Right; _fpslbl.ZIndex=13
+
+local CloseBtn=Instance.new("TextButton",TitleBar)
+CloseBtn.Size=UDim2.new(0,20,0,16); CloseBtn.Position=UDim2.new(1,-24,0.5,-8)
+CloseBtn.BackgroundColor3=Color3.fromRGB(75,0,9); CloseBtn.TextColor3=Color3.fromRGB(255,130,130)
+CloseBtn.Font=Enum.Font.GothamBold; CloseBtn.TextSize=12; CloseBtn.Text="✕"
+CloseBtn.BorderSizePixel=0; CloseBtn.ZIndex=14
+Instance.new("UICorner",CloseBtn).CornerRadius=UDim.new(0,2)
+CloseBtn.MouseButton1Click:Connect(function() if CloseWin then CloseWin() end end)
+
+-- drag
+local _drag=false; local _dragStart; local _dragStartPos
+TitleBar.InputBegan:Connect(function(i)
+    if i.UserInputType==Enum.UserInputType.MouseButton1 then
+        _drag=true; _dragStart=i.Position; _dragStartPos=Win.Position
+    end
+end)
+UIS.InputChanged:Connect(function(i)
+    if _drag and i.UserInputType==Enum.UserInputType.MouseMovement then
+        local d=i.Position-_dragStart
+        Win.Position=UDim2.new(_dragStartPos.X.Scale,_dragStartPos.X.Offset+d.X,
+                                _dragStartPos.Y.Scale,_dragStartPos.Y.Offset+d.Y)
+    end
+end)
+UIS.InputEnded:Connect(function(i)
+    if i.UserInputType==Enum.UserInputType.MouseButton1 then _drag=false end
+end)
+
+-------------------------------------------------
+-- TAB BAR
+-------------------------------------------------
+local TabBar=Instance.new("Frame",Win)
+TabBar.Size=UDim2.new(1,0,0,TAB_H); TabBar.Position=UDim2.new(0,0,0,TITLE_H)
+TabBar.BackgroundColor3=C.title; TabBar.BorderSizePixel=0; TabBar.ZIndex=12
+local TabBotLine=Instance.new("Frame",TabBar)
+TabBotLine.Size=UDim2.new(1,0,0,1); TabBotLine.Position=UDim2.new(0,0,1,-1)
+TabBotLine.BackgroundColor3=C.acc; TabBotLine.BorderSizePixel=0; TabBotLine.ZIndex=13
+
+-------------------------------------------------
+-- CONTENT AREA
+-------------------------------------------------
+local ContentBg=Instance.new("Frame",Win)
+ContentBg.Size=UDim2.new(1,0,0,CONTENT_H); ContentBg.Position=UDim2.new(0,0,0,TITLE_H+TAB_H)
+ContentBg.BackgroundColor3=C.bg; ContentBg.BorderSizePixel=0; ContentBg.ClipsDescendants=true; ContentBg.ZIndex=10
+-- centre divider
+local CDiv=Instance.new("Frame",ContentBg)
+CDiv.Size=UDim2.new(0,1,1,0); CDiv.Position=UDim2.new(0,COL_W,0,0)
+CDiv.BackgroundColor3=C.border; CDiv.BorderSizePixel=0; CDiv.ZIndex=11
+
+-------------------------------------------------
+-- STATUS BAR
+-------------------------------------------------
+local StatusBar=Instance.new("Frame",Win)
+StatusBar.Size=UDim2.new(1,0,0,STATUS_H); StatusBar.Position=UDim2.new(0,0,0,TITLE_H+TAB_H+CONTENT_H)
+StatusBar.BackgroundColor3=C.title; StatusBar.BorderSizePixel=0; StatusBar.ZIndex=12
+local StatusTopLine=Instance.new("Frame",StatusBar)
+StatusTopLine.Size=UDim2.new(1,0,0,1); StatusTopLine.BackgroundColor3=C.border; StatusTopLine.BorderSizePixel=0; StatusTopLine.ZIndex=13
+_pinglbl=Instance.new("TextLabel",StatusBar)
+_pinglbl.Size=UDim2.new(1,-8,1,0); _pinglbl.Position=UDim2.new(0,8,0,0)
+_pinglbl.BackgroundTransparency=1; _pinglbl.Text="NBA Heroes Hub  |  G = Auto Green  |  RightShift = Toggle"
+_pinglbl.TextColor3=C.dim; _pinglbl.Font=Enum.Font.Code; _pinglbl.TextSize=10
+_pinglbl.TextXAlignment=Enum.TextXAlignment.Left; _pinglbl.ZIndex=13
+
+-------------------------------------------------
+-- OPEN / CLOSE
+-------------------------------------------------
+OpenWin = function()
+    if _winOpen then return end; _winOpen=true
+    Win.Visible=true
+    local cx=Win.Position.X.Offset
+    Win.Position=UDim2.new(0,cx,0,CLOSE_Y)
+    TW(Win,0.28,{Position=UDim2.new(0,cx,0,OPEN_Y)}):Play()
+end
+CloseWin = function()
+    if not _winOpen then return end; _winOpen=false
+    local cx=Win.Position.X.Offset
+    TW(Win,0.22,{Position=UDim2.new(0,cx,0,CLOSE_Y)}):Play()
+    task.delay(0.25,function() Win.Visible=false end)
+end
+
+-------------------------------------------------
+-- TAB SYSTEM
+-------------------------------------------------
+local TabDefs = {
+    {key="shooting",  label="Shooting",  order=1},
+    {key="defense",   label="Defense",   order=2},
+    {key="movement",  label="Movement",  order=3},
+    {key="abilities", label="Abilities", order=4},
+    {key="gameplay",  label="Gameplay",  order=5},
+    {key="visuals",   label="Visuals",   order=6},
+    {key="settings",  label="Settings",  order=7},
+}
+local TAB_BTN_W = math.floor(WIN_W / #TabDefs)
+local TabFrames={};  local TabBtns={};  local ActiveTab=nil
+
+for i,td in ipairs(TabDefs) do
+    local btn=Instance.new("TextButton",TabBar)
+    btn.Size=UDim2.new(0,TAB_BTN_W,1,-1); btn.Position=UDim2.new(0,(i-1)*TAB_BTN_W,0,0)
+    btn.BackgroundColor3=C.tabi; btn.TextColor3=C.dim
+    btn.Font=Enum.Font.Code; btn.TextSize=11; btn.Text=td.label
+    btn.BorderSizePixel=0; btn.ZIndex=14
+    if i<#TabDefs then
+        local sep=Instance.new("Frame",btn); sep.Size=UDim2.new(0,1,0.6,0); sep.Position=UDim2.new(1,-1,0.2,0)
+        sep.BackgroundColor3=C.border; sep.BorderSizePixel=0; sep.ZIndex=15
+    end
+    TabBtns[td.key]=btn
+
+    local main=Instance.new("Frame",ContentBg)
+    main.Size=UDim2.new(1,0,1,0); main.BackgroundTransparency=1; main.BorderSizePixel=0
+    main.Visible=false; main.ZIndex=10
+
+    local function MakeCol(xOff, w)
+        local sf=Instance.new("ScrollingFrame",main)
+        sf.Size=UDim2.new(0,w,1,0); sf.Position=UDim2.new(0,xOff,0,0)
+        sf.BackgroundTransparency=1; sf.BorderSizePixel=0
+        sf.ScrollBarThickness=3; sf.ScrollBarImageColor3=C.hot
+        sf.CanvasSize=UDim2.new(0,0,0,0); sf.AutomaticCanvasSize=Enum.AutomaticSize.Y
+        sf.ZIndex=11
+        local pad=Instance.new("UIPadding",sf)
+        pad.PaddingTop=UDim.new(0,6); pad.PaddingLeft=UDim.new(0,8); pad.PaddingRight=UDim.new(0,6)
+        local lay=Instance.new("UIListLayout",sf)
+        lay.FillDirection=Enum.FillDirection.Vertical; lay.SortOrder=Enum.SortOrder.LayoutOrder
+        lay.Padding=UDim.new(0,0)
+        return sf
+    end
+
+    local L=MakeCol(0, COL_W)
+    local R=MakeCol(COL_W+2, COL_W-3)
+    TabFrames[td.key]={main=main, L=L, R=R}
+end
+
+local SwitchTab
+SwitchTab = function(key)
+    if ActiveTab==key then return end
+    if ActiveTab then
+        TabFrames[ActiveTab].main.Visible=false
+        TW(TabBtns[ActiveTab],0.1,{BackgroundColor3=C.tabi, TextColor3=C.dim}):Play()
+        local ul=TabBtns[ActiveTab]:FindFirstChild("_UL"); if ul then ul:Destroy() end
+    end
+    ActiveTab=key; TabFrames[key].main.Visible=true
+    TW(TabBtns[key],0.1,{BackgroundColor3=C.tabact, TextColor3=C.text}):Play()
+    if not TabBtns[key]:FindFirstChild("_UL") then
+        local ul=Instance.new("Frame",TabBtns[key]); ul.Name="_UL"
+        ul.Size=UDim2.new(1,0,0,2); ul.Position=UDim2.new(0,0,1,-2)
+        ul.BackgroundColor3=C.hot; ul.BorderSizePixel=0; ul.ZIndex=16
+    end
+end
+
+for _,td in ipairs(TabDefs) do
+    TabBtns[td.key].MouseButton1Click:Connect(function() SwitchTab(td.key) end)
+end
+
+-------------------------------------------------
+-- WIDGET FACTORIES
+-------------------------------------------------
+local pCtr={}
+local function NO(p) pCtr[p]=(pCtr[p] or 0)+1; return pCtr[p] end
+
+-- Section header
+local function WSec(p,text)
+    local f=Instance.new("Frame",p); f.Size=UDim2.new(1,0,0,22)
+    f.BackgroundTransparency=1; f.BorderSizePixel=0; f.LayoutOrder=NO(p)
+    local lbl=Instance.new("TextLabel",f); lbl.Size=UDim2.new(1,0,1,0)
+    lbl.BackgroundTransparency=1; lbl.Text=text; lbl.TextColor3=C.sec
+    lbl.Font=Enum.Font.GothamBold; lbl.TextSize=11; lbl.TextXAlignment=Enum.TextXAlignment.Left; lbl.ZIndex=12
+end
+
+-- Spacer
+local function WSp(p,h)
+    local f=Instance.new("Frame",p); f.Size=UDim2.new(1,0,0,h or 5)
+    f.BackgroundTransparency=1; f.BorderSizePixel=0; f.LayoutOrder=NO(p)
+end
+
+-- Toggle (Linoria checkbox square)
+local function WT(p,label,cfg,cb)
+    local row=Instance.new("Frame",p); row.Size=UDim2.new(1,0,0,22)
+    row.BackgroundTransparency=1; row.BorderSizePixel=0; row.LayoutOrder=NO(p)
+    local box=Instance.new("Frame",row); box.Size=UDim2.new(0,10,0,10); box.Position=UDim2.new(0,0,0.5,-5)
+    box.BackgroundColor3=cfg.on and C.on or C.off; box.BorderSizePixel=0
+    local bStr=Instance.new("UIStroke",box); bStr.Color=cfg.on and C.bright or C.border; bStr.Thickness=1
+    local lbl=Instance.new("TextLabel",row); lbl.Size=UDim2.new(1,-16,1,0); lbl.Position=UDim2.new(0,15,0,0)
+    lbl.BackgroundTransparency=1; lbl.Text=label; lbl.TextColor3=cfg.on and C.text or C.dim
+    lbl.Font=Enum.Font.Code; lbl.TextSize=11; lbl.TextXAlignment=Enum.TextXAlignment.Left; lbl.ZIndex=12
+    local ov=Instance.new("TextButton",row); ov.Size=UDim2.new(1,0,1,0)
+    ov.BackgroundTransparency=1; ov.Text=""; ov.BorderSizePixel=0; ov.ZIndex=15
+    ov.MouseEnter:Connect(function()
+        if not cfg.on then TW(lbl,0.1,{TextColor3=Color3.fromRGB(150,70,85)}):Play() end
+    end)
+    ov.MouseLeave:Connect(function()
+        if not cfg.on then TW(lbl,0.1,{TextColor3=C.dim}):Play() end
+    end)
+    local function Sync()
+        local on=cfg.on
+        TW(box,0.12,{BackgroundColor3=on and C.on or C.off}):Play()
+        TW(bStr,0.12,{Color=on and C.bright or C.border}):Play()
+        TW(lbl,0.12,{TextColor3=on and C.text or C.dim}):Play()
+    end
+    ov.MouseButton1Click:Connect(function() cfg.on=not cfg.on; Sync(); if cb then cb(cfg.on) end end)
+    return Sync
+end
+
+-- Slider (Linoria style: val/max on filled bar)
+local function WSL(p,label,initVal,lo,hi,cb)
+    local row=Instance.new("Frame",p); row.Size=UDim2.new(1,0,0,42)
+    row.BackgroundTransparency=1; row.BorderSizePixel=0; row.LayoutOrder=NO(p)
+    local lbl=Instance.new("TextLabel",row); lbl.Size=UDim2.new(1,0,0,18); lbl.Position=UDim2.new(0,0,0,0)
+    lbl.BackgroundTransparency=1; lbl.Text=label; lbl.TextColor3=C.text
+    lbl.Font=Enum.Font.Code; lbl.TextSize=11; lbl.TextXAlignment=Enum.TextXAlignment.Left; lbl.ZIndex=12
+    local track=Instance.new("Frame",row); track.Size=UDim2.new(1,0,0,18); track.Position=UDim2.new(0,0,0,20)
+    track.BackgroundColor3=C.card; track.BorderSizePixel=0
+    Instance.new("UICorner",track).CornerRadius=UDim.new(0,2)
+    local tStr=Instance.new("UIStroke",track); tStr.Color=C.border; tStr.Thickness=1
+    local r0=(initVal-lo)/(hi-lo)
+    local fill=Instance.new("Frame",track); fill.BackgroundColor3=C.slid; fill.BorderSizePixel=0
+    fill.Size=UDim2.new(r0,0,1,0); Instance.new("UICorner",fill).CornerRadius=UDim.new(0,2)
+    local vlbl=Instance.new("TextLabel",track); vlbl.Size=UDim2.new(1,0,1,0)
+    vlbl.BackgroundTransparency=1; vlbl.Text=tostring(initVal).."/"..tostring(hi)
+    vlbl.TextColor3=C.text; vlbl.Font=Enum.Font.Code; vlbl.TextSize=10; vlbl.ZIndex=13
+    local tBtn=Instance.new("TextButton",track); tBtn.Size=UDim2.new(1,0,1,0)
+    tBtn.BackgroundTransparency=1; tBtn.Text=""; tBtn.ZIndex=14; tBtn.BorderSizePixel=0
+    local drag=false
+    tBtn.MouseButton1Down:Connect(function() drag=true end)
+    UIS.InputEnded:Connect(function(i) if i.UserInputType==Enum.UserInputType.MouseButton1 then drag=false end end)
+    RunSvc.Heartbeat:Connect(function()
+        if not drag then return end
+        local mx=UIS:GetMouseLocation().X
+        local r=math.clamp((mx-track.AbsolutePosition.X)/track.AbsoluteSize.X,0,1)
+        local v=math.floor(lo+r*(hi-lo))
+        fill.Size=UDim2.new(r,0,1,0); vlbl.Text=tostring(v).."/"..tostring(hi)
+        if cb then cb(v) end
+    end)
+end
+
+-- Button
+local function WB(p,label,cb)
+    local row=Instance.new("Frame",p); row.Size=UDim2.new(1,0,0,24)
+    row.BackgroundTransparency=1; row.BorderSizePixel=0; row.LayoutOrder=NO(p)
+    local btn=Instance.new("TextButton",row); btn.Size=UDim2.new(1,0,0,20); btn.Position=UDim2.new(0,0,0.5,-10)
+    btn.BackgroundColor3=C.card; btn.TextColor3=C.text; btn.Font=Enum.Font.Code; btn.TextSize=11
+    btn.Text=label; btn.BorderSizePixel=0
+    Instance.new("UICorner",btn).CornerRadius=UDim.new(0,2)
+    local bStr=Instance.new("UIStroke",btn); bStr.Color=C.border; bStr.Thickness=1
+    btn.MouseEnter:Connect(function() TW(btn,0.08,{BackgroundColor3=C.acc}):Play(); TW(bStr,0.08,{Color=C.hot}):Play() end)
+    btn.MouseLeave:Connect(function() TW(btn,0.1,{BackgroundColor3=C.card}):Play(); TW(bStr,0.1,{Color=C.border}):Play() end)
+    btn.MouseButton1Down:Connect(function() TW(btn,0.06,{BackgroundColor3=C.hot}):Play() end)
+    btn.MouseButton1Up:Connect(function() TW(btn,0.08,{BackgroundColor3=C.acc}):Play() end)
+    btn.MouseButton1Click:Connect(function() cb() end)
+end
+
+-- Info text
+local function WI(p,text)
+    local f=Instance.new("Frame",p); f.Size=UDim2.new(1,0,0,16)
+    f.BackgroundTransparency=1; f.BorderSizePixel=0; f.LayoutOrder=NO(p)
+    local lbl=Instance.new("TextLabel",f); lbl.Size=UDim2.new(1,0,1,0)
+    lbl.BackgroundTransparency=1; lbl.Text=text; lbl.TextColor3=C.dim
+    lbl.Font=Enum.Font.Code; lbl.TextSize=10; lbl.TextXAlignment=Enum.TextXAlignment.Left; lbl.ZIndex=12
+end
+
+-- Stat row
+local function WSR(p,label)
+    local f=Instance.new("Frame",p); f.Size=UDim2.new(1,0,0,20)
+    f.BackgroundTransparency=1; f.BorderSizePixel=0; f.LayoutOrder=NO(p)
+    local lb=Instance.new("TextLabel",f); lb.Size=UDim2.new(0.6,0,1,0)
+    lb.BackgroundTransparency=1; lb.Text=label; lb.TextColor3=C.dim
+    lb.Font=Enum.Font.Code; lb.TextSize=11; lb.TextXAlignment=Enum.TextXAlignment.Left; lb.ZIndex=12
+    local vl=Instance.new("TextLabel",f); vl.Size=UDim2.new(0.4,0,1,0); vl.Position=UDim2.new(0.6,0,0,0)
+    vl.BackgroundTransparency=1; vl.TextColor3=C.bright; vl.Font=Enum.Font.Code
+    vl.TextSize=11; vl.TextXAlignment=Enum.TextXAlignment.Right; vl.ZIndex=12
+    return function(v)
+        vl.Text=tostring(v)
+        TW(vl,0.05,{TextColor3=C.glow}):Play()
+        task.delay(0.3,function() TW(vl,0.2,{TextColor3=C.bright}):Play() end)
+    end
+end
+
+-------------------------------------------------
+-- BUILD TABS
+-------------------------------------------------
+local tf=TabFrames
+
+--- SHOOTING ---
+local L,R=tf.shooting.L, tf.shooting.R
+WSec(L,"Automation")
+local SyncAutoGreen=WT(L,"Auto Green  [G]",Cfg.AutoGreen,nil)
+WT(L,"Perfect Release",Cfg.PerfectRelease,nil)
+WT(L,"No-Fail Shot",Cfg.NoFailShot,nil)
+WSp(L)
+WSec(L,"Timing")
+WSL(L,"Green Timing (ms)",Cfg.GreenTime.val,100,700,function(v) Cfg.GreenTime.val=v end)
+WT(L,"Shot Timing Assist",Cfg.ShotTimingAssist,function(on)
+    if not on and _shotTimingGui then pcall(function() _shotTimingGui:Destroy() end); _shotTimingGui=nil end
+end)
+WSec(R,"Assist")
+WT(R,"Shot Meter Spoof",Cfg.ShotMeterSpoof,nil)
+WT(R,"Release Predictor",Cfg.ReleasePredictor,nil)
+WT(R,"Range Indicator",Cfg.RangeIndicator,function(on)
+    if not on and _rangePart then pcall(function() _rangePart:Destroy() end); _rangePart=nil end
+end)
+WSp(R)
+WI(R,"Nudge -10ms if late,")
+WI(R,"+10ms if early")
+
+--- DEFENSE ---
+L,R=tf.defense.L, tf.defense.R
+WSec(L,"Steal & Block")
+WT(L,"Steal Assist  (E key)",Cfg.StealAssist,nil)
+WT(L,"Block Assist",Cfg.BlockAssist,nil)
+WT(L,"Anti Ankle Breaker",Cfg.AntiAnkle,nil)
+WT(L,"Auto Contest",Cfg.AutoContest,nil)
+WSec(R,"Tracking")
+WT(R,"Interception Predictor",Cfg.InterceptionPred,nil)
+WT(R,"Defensive Aura",Cfg.DefensiveAura,function(on)
+    if not on and _defAura then pcall(function() _defAura:Destroy() end); _defAura=nil end
+end)
+WT(R,"Player ESP",Cfg.PlayerESP,nil)
+WT(R,"Ball ESP",Cfg.BallESP,function(on)
+    if not on then for _,v in ipairs(WS:GetDescendants()) do if v.Name=="_BallESP" then v:Destroy() end end end
+end)
+
+--- MOVEMENT ---
+L,R=tf.movement.L, tf.movement.R
+WSec(L,"Speed")
+WT(L,"Speed Boost",Cfg.SpeedBoost,function(on) if not on then CleanBV() end end)
+WSL(L,"Speed",Cfg.SpeedBoost.val,16,250,function(v) Cfg.SpeedBoost.val=v end)
+WT(L,"Sprint Assist",Cfg.SprintAssist,nil)
+WSp(L)
+WSec(L,"Control")
+WT(L,"Quick Stop",Cfg.QuickStop,nil)
+WT(L,"Air Control",Cfg.AirControl,nil)
+WSec(R,"Misc")
+WT(R,"Infinite Jump",Cfg.InfJump,nil)
+WT(R,"Noclip",Cfg.Noclip,nil)
+WT(R,"Infinite Stamina",Cfg.InfStamina,nil)
+
+--- ABILITIES ---
+L,R=tf.abilities.L, tf.abilities.R
+WSec(L,"Automation")
+WT(L,"Auto Ability",Cfg.AutoAbility,nil)
+WT(L,"Auto Awakening",Cfg.AutoAwakening,nil)
+WSp(L)
+WI(L,"Q = ability key")
+WI(L,"Fires on cooldown reset")
+WSec(R,"Indicators")
+WT(R,"Awakening Indicator",Cfg.AwakeningIndicator,function(on)
+    if not on and _awakeGui then pcall(function() _awakeGui:Destroy() end); _awakeGui=nil end
+end)
+WT(R,"Ability Cooldown",Cfg.AbilityCooldown,nil)
+WT(R,"Ability Range",Cfg.AbilityRange,nil)
+WT(R,"Ultimate Ready Alert",Cfg.UltimateAlert,nil)
+
+--- GAMEPLAY ---
+L,R=tf.gameplay.L, tf.gameplay.R
+WSec(L,"Ball")
+WT(L,"Auto Rebound",Cfg.AutoRebound,nil)
+WT(L,"Auto Pass  (R)",Cfg.AutoPass,nil)
+WT(L,"Pass Prediction",Cfg.PassPrediction,function(on)
+    if not on and _passGui then pcall(function() _passGui:Destroy() end); _passGui=nil end
+end)
+WT(L,"Ball Magnet",Cfg.BallMagnet,nil)
+WSp(L)
+WSec(L,"Misc")
+WT(L,"Auto Queue",Cfg.AutoQueue,nil)
+WT(L,"Anti-AFK",Cfg.AntiAFK,nil)
+WT(L,"Goal FX",Cfg.GoalFX,nil)
+WSec(R,"Economy")
+WB(R,"+ 1000 Coins (Scan)",function()
+    local kws={"coin","cash","currency","reward","give","earn","wallet"}; local fired=false
+    pcall(function()
+        for _,v in ipairs(RS:GetDescendants()) do
+            if v:IsA("RemoteEvent") or v:IsA("RemoteFunction") then
+                local n=v.Name:lower()
+                for _,kw in ipairs(kws) do
+                    if n:find(kw) then
+                        if v:IsA("RemoteEvent") then v:FireServer(1000) else v:InvokeServer(1000) end
+                        fired=true; Stats.CoinsEarned=Stats.CoinsEarned+1000
+                    end
+                end
+            end
+        end
+    end)
+    Notify(fired and "Coin remote fired" or "No coin remote found")
+end)
+WB(R,"+ Coins (Replay x10)",function()
+    if not _coinRemote then Notify("Earn coins first"); return end
+    for _=1,10 do pcall(function() _coinRemote:FireServer(table.unpack(_coinArgs)) end); task.wait(0.05) end
+    Notify("Coin remote replayed x10")
+end)
+WB(R,"+ OP Pack (Scan)",function()
+    local kws={"pack","give","grant","addpack","givepack","oppack","rewardpack"}; local fired=false
+    pcall(function()
+        for _,v in ipairs(RS:GetDescendants()) do
+            if v:IsA("RemoteEvent") or v:IsA("RemoteFunction") then
+                local n=v.Name:lower()
+                for _,kw in ipairs(kws) do
+                    if n:find(kw) then
+                        if v:IsA("RemoteEvent") then
+                            v:FireServer("OP",1); task.wait(0.05); v:FireServer(1); task.wait(0.05); v:FireServer()
+                        else v:InvokeServer("OP",1) end; fired=true
+                    end
+                end
+            end
+        end
+    end)
+    if fired then Stats.PacksOpened=Stats.PacksOpened+1; Notify("Pack fired") else Notify("No pack remote") end
+end)
+WB(R,"+ Pack (Replay x5)",function()
+    if not _packRemote then Notify("Open a pack first"); return end
+    for _=1,5 do
+        pcall(function()
+            if _packRemote:IsA("RemoteEvent") then _packRemote:FireServer(table.unpack(_packArgs))
+            else _packRemote:InvokeServer(table.unpack(_packArgs)) end
+        end); task.wait(0.1)
+    end
+    Stats.PacksOpened=Stats.PacksOpened+5; Notify("Pack replayed x5")
+end)
+WSp(R)
+WSec(R,"Teleport")
+WB(R,"Teleport to Ball",function()
+    local ball=FindBall()
+    if ball and LP.Character then LP.Character.HumanoidRootPart.CFrame=ball.CFrame+Vector3.new(0,6,0)
+    else Notify("No ball - mid-match only") end
+end)
+WB(R,"Teleport to Basket",function()
+    local found=nil
+    for _,name in ipairs({"Hoop","Basket","Backboard","Rim","Net"}) do
+        local f=WS:FindFirstChild(name,true); if f and f:IsA("BasePart") then found=f; break end
+    end
+    if found and LP.Character then LP.Character.HumanoidRootPart.CFrame=found.CFrame+Vector3.new(0,3,4)
+    else Notify("Basket not found") end
+end)
+
+--- VISUALS ---
+L,R=tf.visuals.L, tf.visuals.R
+WSec(L,"Overlay")
+WT(L,"Player ESP",Cfg.PlayerESP,nil)
+WT(L,"Distance ESP",Cfg.DistanceESP,nil)
+WT(L,"Health Bars",Cfg.HealthBars,nil)
+WT(L,"Team Colors",Cfg.TeamColors,nil)
+WT(L,"Ball ESP",Cfg.BallESP,nil)
+WSec(R,"Advanced")
+WT(R,"Skeleton ESP",Cfg.SkeletonESP,nil)
+WT(R,"Tracer Lines",Cfg.TracerLines,function(on) if not on then CleanTracers() end end)
+WT(R,"FOV Circle",Cfg.FOVCircle,function(on)
+    if not on and _fovGui then pcall(function() _fovGui:Destroy() end); _fovGui=nil; _fovFrame=nil end
+end)
+
+--- SETTINGS ---
+L,R=tf.settings.L, tf.settings.R
+WSec(L,"Keybind")
+WI(L,"Current: RightShift")
+local _kbWrap=Instance.new("Frame",L); _kbWrap.Size=UDim2.new(1,0,0,24)
+_kbWrap.BackgroundTransparency=1; _kbWrap.BorderSizePixel=0; _kbWrap.LayoutOrder=NO(L)
+_rebindBtnRef=Instance.new("TextButton",_kbWrap)
+_rebindBtnRef.Size=UDim2.new(1,0,0,20); _rebindBtnRef.Position=UDim2.new(0,0,0.5,-10)
+_rebindBtnRef.BackgroundColor3=C.card; _rebindBtnRef.TextColor3=C.text
+_rebindBtnRef.Font=Enum.Font.Code; _rebindBtnRef.TextSize=11; _rebindBtnRef.Text="Set Keybind"; _rebindBtnRef.BorderSizePixel=0
+Instance.new("UICorner",_rebindBtnRef).CornerRadius=UDim.new(0,2)
+local _kbStr=Instance.new("UIStroke",_rebindBtnRef); _kbStr.Color=C.border; _kbStr.Thickness=1
+_rebindBtnRef.MouseButton1Click:Connect(function()
+    _rebindMode=true; _rebindBtnRef.Text="Press any key..."; TW(_kbStr,0.1,{Color=C.bright}):Play()
+end)
+WSp(L)
+WSec(L,"Display")
+WT(L,"FPS Counter",Cfg.ShowFPS,nil)
+WT(L,"Ping Display",Cfg.ShowPing,nil)
+WSp(L)
+WSec(L,"Data")
+WB(L,"Save Config",function()
+    if writefile then
+        local HS=game:GetService("HttpService"); local data={}
+        for k,v in pairs(Cfg) do if type(v)=="table" and v.on~=nil then data[k]=v.on end end
+        pcall(function() writefile("NBAHeroesHub.json",HS:JSONEncode(data)) end); Notify("Saved")
+    else Notify("writefile unavailable") end
+end)
+WB(L,"Load Config",function()
+    if readfile then
+        pcall(function()
+            local HS=game:GetService("HttpService")
+            local data=HS:JSONDecode(readfile("NBAHeroesHub.json"))
+            for k,v in pairs(data) do if Cfg[k] and type(v)=="boolean" then Cfg[k].on=v end end
+        end); Notify("Loaded")
+    else Notify("readfile unavailable") end
+end)
+WB(L,"Reset All",function()
+    for _,v in pairs(Cfg) do if type(v)=="table" and v.on~=nil then v.on=false end end; Notify("Reset")
+end)
+
+WSec(R,"Session Stats")
+local UpdTime   = WSR(R,"Time")
+local UpdShots  = WSR(R,"Shots")
+local UpdGreens = WSR(R,"Greens")
+local UpdSteals = WSR(R,"Steals")
+local UpdBlocks = WSR(R,"Blocks")
+local UpdGoals  = WSR(R,"Goals")
+local UpdAnkles = WSR(R,"Ankles Saved")
+WSp(R)
+WB(R,"Reset Stats",function()
+    Stats.StartTime=tick(); Stats.Shots=0; Stats.Greens=0; Stats.Steals=0
+    Stats.Blocks=0; Stats.Goals=0; Stats.AnklesSaved=0; Stats.CoinsEarned=0; Stats.PacksOpened=0
+    UpdTime("00:00"); UpdShots(0); UpdGreens(0); UpdSteals(0); UpdBlocks(0); UpdGoals(0); UpdAnkles(0)
+    Notify("Stats reset")
+end)
+
+SwitchTab("shooting")
+
+-------------------------------------------------
+-- KEYBINDS
+-------------------------------------------------
+UIS.InputBegan:Connect(function(i,gp)
+    if gp then return end
+    if _rebindMode then
+        HubKeybind=i.KeyCode; _rebindMode=false
+        if _rebindBtnRef then _rebindBtnRef.Text="Set Keybind"; TW(_kbStr,0.1,{Color=C.border}):Play() end
+        Notify("Keybind → "..tostring(i.KeyCode)); return
+    end
+    if i.KeyCode==HubKeybind then
+        if _winOpen then CloseWin() else OpenWin() end; return
+    end
+    if i.KeyCode==Enum.KeyCode.G then
+        Cfg.AutoGreen.on=not Cfg.AutoGreen.on
+        if SyncAutoGreen then SyncAutoGreen() end
+        Notify("Auto Green: "..(Cfg.AutoGreen.on and "ON" or "OFF"))
+    end
+end)
+
+-------------------------------------------------
+-- LOOPS
+-------------------------------------------------
+RunSvc.Heartbeat:Connect(function(dt)
+    if not Cfg.SpeedBoost.on then CleanBV()
+    else
+        local bv=GetBV(); if bv then
+            local hum=LP.Character and LP.Character:FindFirstChild("Humanoid")
+            if hum then bv.Velocity=hum.MoveDirection*Cfg.SpeedBoost.val*(Cfg.SprintAssist.on and 1.35 or 1) end
+        end
+    end
+    if Cfg.QuickStop.on then
+        local bv=GetBV(); if bv then
+            local hum=LP.Character and LP.Character:FindFirstChild("Humanoid")
+            if hum and hum.MoveDirection.Magnitude<0.1 then bv.Velocity=Vector3.zero end
+        end
+    end
+    if Cfg.ShotTimingAssist.on then UpdateShotTimingNeedle(dt) end
+    _fpsFrames=_fpsFrames+1
+    local now=tick()
+    if now-_fpsLast>=1 then _fps=_fpsFrames; _fpsFrames=0; _fpsLast=now end
+end)
+RunSvc.Stepped:Connect(function()
+    if Cfg.Noclip.on and LP.Character then
+        for _,p in ipairs(LP.Character:GetDescendants()) do if p:IsA("BasePart") then p.CanCollide=false end end
+    end
+    if Cfg.AirControl.on and LP.Character then
+        local hum=LP.Character:FindFirstChild("Humanoid")
+        if hum and hum:GetState()==Enum.HumanoidStateType.Freefall then hum.WalkSpeed=32
+        elseif hum and not Cfg.SpeedBoost.on then hum.WalkSpeed=16 end
+    end
+end)
+RunSvc.Heartbeat:Connect(function()
+    UpdatePlayerOverlays(); UpdateTracers(); UpdateRangeIndicator(); UpdateFOVCircle(); UpdateDefensiveAura()
+    if Cfg.BallESP.on then
+        local ball=FindBall()
+        if ball and not ball:FindFirstChild("_BallESP") then
+            local sel=Instance.new("SelectionBox",ball); sel.Name="_BallESP"; sel.Adornee=ball
+            sel.Color3=C.bright; sel.LineThickness=0.045; sel.SurfaceColor3=C.hot; sel.SurfaceTransparency=0.65
+        end
+    end
+end)
+UIS.JumpRequest:Connect(function()
+    if Cfg.InfJump.on and LP.Character then
+        local h=LP.Character:FindFirstChild("Humanoid")
+        if h then h:ChangeState(Enum.HumanoidStateType.Jumping) end
+    end
+end)
+task.spawn(function()
+    while true do task.wait(55)
+        if Cfg.AntiAFK.on then pcall(function() VU:CaptureController(); VU:ClickButton2(Vector2.new()) end) end
+    end
+end)
+task.spawn(function()
+    while true do task.wait(3); if not Cfg.AutoQueue.on then continue end
+        pcall(function()
+            for _,v in ipairs(LP.PlayerGui:GetDescendants()) do
+                if v:IsA("TextButton") and v.Visible and v.AbsoluteSize.X>0 and v.Text:lower()=="play" then v:FireSingleClick() end
+            end
+        end)
+    end
+end)
+task.spawn(function()
+    while true do task.wait(0.7); if not Cfg.StealAssist.on then continue end
+        local ball=FindBall(); if not ball then continue end
+        if not LP.Character then continue end
+        local rp=LP.Character:FindFirstChild("HumanoidRootPart"); if not rp then continue end
+        if (rp.Position-ball.Position).Magnitude<12 then
+            SimKey(Enum.KeyCode.E,true); task.wait(0.07); SimKey(Enum.KeyCode.E,false)
+            Stats.Steals=Stats.Steals+1
+        end
+    end
+end)
+task.spawn(function()
+    while true do task.wait(0.15)
+        if not Cfg.AutoGreen.on and not Cfg.PerfectRelease.on then continue end
+        if not HasBall() then continue end
+        task.spawn(GreenMacro); task.wait(1.5)
+    end
+end)
+task.spawn(function()
+    while true do task.wait(0.15); if not Cfg.AutoGreen.on then continue end
+        pcall(function()
+            for _,v in ipairs(WS:GetDescendants()) do
+                if v:IsA("ProximityPrompt") then
+                    local t=(v.ObjectText..v.ActionText):lower()
+                    if t:find("shoot") or t:find("dunk") then fireproximityprompt(v) end
+                end
+            end
+        end)
+    end
+end)
+task.spawn(function()
+    while true do task.wait(0.05); if Cfg.AntiAnkle.on then AntiAnkleStep() end end
+end)
+task.spawn(function()
+    while true do task.wait(0.08); if Cfg.BlockAssist.on then AutoBlockTick() end end
+end)
+task.spawn(function()
+    while true do task.wait(0.1); if not Cfg.AutoContest.on then continue end
+        local ball=FindBall(); if not ball then continue end
+        if ball.AssemblyLinearVelocity.Y<10 or HasBall() then continue end
+        if not LP.Character then continue end
+        local root=LP.Character:FindFirstChild("HumanoidRootPart"); if not root then continue end
+        if (root.Position-ball.Position).Magnitude>15 then continue end
+        local hum=LP.Character:FindFirstChild("Humanoid"); if hum then hum:ChangeState(Enum.HumanoidStateType.Jumping) end
+        task.wait(0.8)
+    end
+end)
+task.spawn(function()
+    while true do task.wait(0.2); if not Cfg.InterceptionPred.on then
+        local ex=WS:FindFirstChild("_NBAIntercept"); if ex then ex:Destroy() end; continue end
+        local ball=FindBall(); if not ball then continue end
+        if ball.AssemblyLinearVelocity.Magnitude<5 then continue end
+        pcall(function()
+            local pred=PredictBallPos(ball,0.5)
+            local ex=WS:FindFirstChild("_NBAIntercept")
+            if not ex then
+                ex=Instance.new("Part"); ex.Name="_NBAIntercept"; ex.Anchored=true; ex.CanCollide=false
+                ex.Size=Vector3.new(1.5,1.5,1.5); ex.Shape=Enum.PartType.Ball
+                ex.Material=Enum.Material.Neon; ex.Color=C.bright; ex.Transparency=0.4; ex.CastShadow=false; ex.Parent=WS
+            end
+            ex.Position=pred
+        end)
+    end
+end)
+task.spawn(function()
+    while true do task.wait(0.15); if not Cfg.AutoRebound.on then continue end
+        local ball=FindBall(); if not ball then continue end
+        if not LP.Character then continue end
+        local root=LP.Character:FindFirstChild("HumanoidRootPart"); if not root then continue end
+        if ball.AssemblyLinearVelocity.Magnitude>10 and not HasBall() then
+            local pred=PredictBallPos(ball,0.5)
+            local hum=LP.Character:FindFirstChild("Humanoid")
+            if hum then hum:MoveTo(Vector3.new(pred.X,root.Position.Y,pred.Z)) end
+        end
+    end
+end)
+task.spawn(function()
+    while true do task.wait(0.1); if not Cfg.BallMagnet.on or HasBall() then continue end
+        local ball=FindBall(); if not ball then continue end
+        if not LP.Character then continue end
+        local hum=LP.Character:FindFirstChild("Humanoid"); if hum then hum:MoveTo(ball.Position) end
+    end
+end)
+task.spawn(function()
+    while true do task.wait(1.2); if not Cfg.AutoPass.on or not HasBall() then continue end
+        SimKey(Enum.KeyCode.R,true); task.wait(0.08); SimKey(Enum.KeyCode.R,false)
+    end
+end)
+task.spawn(function()
+    while true do task.wait(1.5); if not Cfg.AutoPosition.on or HasBall() then continue end
+        if not LP.Character then continue end
+        local ball=FindBall(); if not ball then continue end
+        local root=LP.Character:FindFirstChild("HumanoidRootPart"); if not root then continue end
+        local hum=LP.Character:FindFirstChild("Humanoid")
+        if hum then hum:MoveTo(Vector3.new(ball.Position.X+12,root.Position.Y,ball.Position.Z)) end
+    end
+end)
+task.spawn(function()
+    while true do task.wait(0.5)
+        if Cfg.AutoAbility.on then SimKey(Enum.KeyCode.Q,true); task.wait(0.05); SimKey(Enum.KeyCode.Q,false) end
+    end
+end)
+task.spawn(function()
+    while true do task.wait(2)
+        if Cfg.AwakeningIndicator.on then UpdateAwakeningIndicator() end
+        if Cfg.AutoAwakening.on then
+            pcall(function()
+                for _,v in ipairs(LP.PlayerGui:GetDescendants()) do
+                    if v:IsA("TextButton") and v.Visible and v.AbsoluteSize.X>0 then
+                        local n=v.Text:lower()
+                        if n:find("awaken") or n:find("ult") or n:find("activate") then v:FireSingleClick() end
+                    end
+                end
+            end)
+        end
+    end
+end)
+task.spawn(function()
+    while true do task.wait(0.5)
+        if Cfg.PassPrediction.on then
+            if not _passGui or not _passGui.Parent then
+                _passGui=Instance.new("ScreenGui"); _passGui.Name="_NBAPass"; _passGui.ResetOnSpawn=false
+                _passGui.ZIndexBehavior=Enum.ZIndexBehavior.Sibling; _passGui.Parent=LP.PlayerGui
+                local lbl=Instance.new("TextLabel",_passGui)
+                lbl.Size=UDim2.new(0,165,0,24); lbl.AnchorPoint=Vector2.new(0.5,0)
+                lbl.Position=UDim2.new(0.5,0,0.12,0); lbl.BackgroundColor3=C.hot; lbl.BackgroundTransparency=0.15; lbl.BorderSizePixel=0
+                lbl.Text="PASS OPEN  [R]"; lbl.TextColor3=Color3.fromRGB(255,255,255)
+                lbl.Font=Enum.Font.GothamBold; lbl.TextSize=12; lbl.ZIndex=99
+                Instance.new("UICorner",lbl).CornerRadius=UDim.new(0,3)
+                TS:Create(lbl,TweenInfo.new(0.8,Enum.EasingStyle.Sine,Enum.EasingDirection.InOut,-1,true),{BackgroundTransparency=0.5}):Play()
+            end
+        elseif _passGui then pcall(function() _passGui:Destroy() end); _passGui=nil end
+    end
+end)
+
+-- stat + status ticker
+task.spawn(function()
+    while true do task.wait(1)
+        UpdTime(FmtTime(tick()-Stats.StartTime))
+        UpdShots(Stats.Shots); UpdGreens(Stats.Greens); UpdSteals(Stats.Steals)
+        UpdBlocks(Stats.Blocks); UpdGoals(Stats.Goals); UpdAnkles(Stats.AnklesSaved)
+        if _fpslbl then
+            local fps=Cfg.ShowFPS.on and ("FPS: ".._fps) or "--"
+            local ping=Cfg.ShowPing.on and ("PING: "..GetPing().."ms") or "--"
+            _fpslbl.Text=fps.."  "..ping
+        end
+    end
+end)
+
+-------------------------------------------------
+-- NAMECALL HOOK
+-------------------------------------------------
+local _oldNC
+pcall(function()
+    _oldNC=hookmetamethod(game,"__namecall",function(self,...)
+        local m=getnamecallmethod(); local name=tostring(self.Name):lower()
+        if m=="FireServer" or m=="InvokeServer" then
+            if name:find("score") or name:find("goal") or name:find("point") or name:find("basket") then task.spawn(TriggerGoalFX) end
+            if name:find("coin") or name:find("cash") or name:find("earn") or name:find("reward") or name:find("currency") or name:find("wallet") then
+                _coinRemote=self; _coinArgs={...}
+            end
+            if name:find("pack") or name:find("give") or name:find("grant") or name:find("open") then
+                if name:find("grant") or name:find("give") or name:find("add") then _packRemote=self; _packArgs={...}
+                elseif not _packRemote then _packRemote=self; _packArgs={...} end
+            end
+        end
+        return _oldNC(self,...)
+    end)
+end)
+
+-------------------------------------------------
+-- RESPAWN
+-------------------------------------------------
+LP.CharacterAdded:Connect(function(char)
+    CleanBV()
+    if _defAura then pcall(function() _defAura:Destroy() end); _defAura=nil end
+    Char=char; Root=char:WaitForChild("HumanoidRootPart"); Hum=char:WaitForChild("Humanoid")
+    task.delay(2,WatchScore)
+end)
+
+print("[NBAHub] loaded — RShift = toggle | G = Auto Green")
